@@ -1,0 +1,28 @@
+
+@host = http://127.0.0.1:5600
+@api_key = testabc123
+
+### Get Keys
+POST {{host}}/api/keys/find
+Content-Type: application/json
+Cookie: api-key={{api_key}}
+
+{
+  "kids": "0000000006e582150000000000000000,5cee34913fd876e1605af0aa8fee6f43"
+}
+
+### Save Key
+POST {{host}}/api/keys
+Content-Type: application/json
+Cookie: api-key={{api_key}}
+
+{
+  "kid": "48c4b9cb1c728732f980f0b9cce11fb4",
+  "key": "38c4b9cb1c728732f980f0b9cce11fb4"
+}
+
+
+### Get Key
+GET {{host}}/api/keys/0000000006e582150000000000000000
+Content-Type: application/json
+Cookie: api-key={{api_key}}

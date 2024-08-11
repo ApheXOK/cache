@@ -1,0 +1,9 @@
+[server]
+host = "http://20.188.117.181:5600"
+api_key = "abctest1234"
+
+[database]
+path = "netflix.db"
+
+[mode]
+operation_mode = 1

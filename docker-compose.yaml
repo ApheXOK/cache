@@ -1,0 +1,17 @@
+
+services:
+  cache:
+    build:
+      context: .
+      dockerfile: ./Dockerfile
+    image: cache-key
+    environment:
+      API_KEY: abctest1234
+    ports:
+      - "5600:5600"
+    networks:
+      - anet
+
+networks:
+  anet:
+    driver: bridge
