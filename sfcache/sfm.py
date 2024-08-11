@@ -1,8 +1,7 @@
-import ctypes
-import string
-import psutil
-import time
 import re
+import pymem
+import pymem.process
+import time
 import sqlite3
 import requests
 import signal
@@ -10,30 +9,17 @@ import sys
 import concurrent.futures
 import toml
 
-def find_pid_by_name(process_name):
-    for proc in psutil.process_iter(['pid', 'name']):
-        if proc.info['name'] == process_name:
-            return proc.info['pid']
-    return None
-
-def read_memory(process_handle, address, size):
-    buffer = ctypes.create_string_buffer(size)
-    bytes_read = ctypes.c_ulong(0)
-    if ctypes.windll.kernel32.ReadProcessMemory(process_handle, address, buffer, size, ctypes.byref(bytes_read)):
-        return buffer.raw.decode('utf-8', errors='ignore').strip()
-    return None
-
 class MemoryScanner:
-    def __init__(self,config_file='config.toml'):
+    def __init__(self, config_file='config.toml'):
         config = toml.load(config_file)
         self.host = config['server']['host']
         self.api_key = config['server']['api_key']
         self.conn = sqlite3.connect(config['database']['path'])
         self.mode = config['mode']['operation_mode']
-        self.conn = sqlite3.connect('netflix.db')
         self.cursor = self.conn.cursor()
         self.added_values = set()
         self.running = True
+        self.pattern = re.compile(r"([0-9a-f]{32}):([0-9a-f]{32})")
 
         self.cursor.execute('''
             CREATE TABLE IF NOT EXISTS cached (
@@ -61,49 +47,47 @@ class MemoryScanner:
         try:
             response = requests.post(url, json=payload, headers=headers)
             response.raise_for_status()
+            print("Successfully sent to remote.")
         except requests.RequestException as e:
-            print(f"Error: {response.json()["error"]}")
+            print(f"# Error sending to remote: {response.json()["error"]}")
 
-    def scan_memory(self, pid):
-        process_handle = ctypes.windll.kernel32.OpenProcess(0x10 | 0x20, False, pid)
-        if not process_handle:
-            print(f"Failed to open process {pid}.")
-            return
-
+    def scan_memory(self):
+        process_name = "StreamFab64.exe"
         try:
+            pm = pymem.Pymem(process_name)
+            address = 0x00000000
+            max_address = 0x7FFFFFFF  
+            pattern = r"([0-9a-f]{32}):([0-9a-f]{32})"
             with concurrent.futures.ThreadPoolExecutor() as executor:
-                for address in range(0x000000000, 0x7FFFFFFF, 4096):
-                    if not self.running:
-                        break
-                    data = read_memory(process_handle, address, 512)
-                    if data:
-                        match = re.search(r"([0-9a-f]{32}):([0-9a-f]{32})", data)
-                        if match:
-                            extracted_value = match.group(0)
-                            if extracted_value.startswith("00000"):
-                                if extracted_value not in self.added_values:
-                                    print("Match found:", extracted_value)
-                                    kid, key = extracted_value.split(':')
-                                    future_insert = executor.submit(self.insert_key, kid, key)
-                                    future_send = executor.submit(self.send_to_remote, kid, key)
-                                    concurrent.futures.wait([future_insert, future_send])
-                                    self.added_values.add(extracted_value)
+                while address < max_address:
+                    try:
+                        memory_chunk = pm.read_bytes(address, 0x1000)  # Read in chunks of 4KB
+                        data = memory_chunk.decode('utf-8', errors='ignore').strip()
+                        matches = re.findall(pattern, data)
+                        for match in matches:
+                            extracted_value = f"{match[0]}:{match[1]}"
+                            if extracted_value.startswith("00000") and extracted_value not in self.added_values:
+                                print(f"Match found at {hex(address)}: {extracted_value}")
+                                kid, key = extracted_value.split(':')
+                                future_insert = executor.submit(self.insert_key, kid, key)
+                                future_send = executor.submit(self.send_to_remote, kid, key)
+                                concurrent.futures.wait([future_insert, future_send])
+                                self.added_values.add(extracted_value)
+                    except (pymem.exception.MemoryReadError, pymem.exception.MemoryWriteError):
+                        pass 
 
+                    address += 0x1000  
+
+        except Exception as e:
+            print(f"An error occurred during memory scan: {e}")
         finally:
-            ctypes.windll.kernel32.CloseHandle(process_handle)
+            if 'pm' in locals():
+                pm.close_process()
 
     def run(self):
-        process_name = "StreamFab64.exe"
-        pid = find_pid_by_name(process_name)
-
-        if not pid:
-            print(f"Process {process_name} not found.")
-            return
-
-        print(f"Found PID: {pid}")
         while self.running:
-            self.scan_memory(pid)
-            time.sleep(1)
+            self.scan_memory()
+            time.sleep(1)  # Wait for 1 second before the next scan
 
     def stop(self):
         self.running = False
